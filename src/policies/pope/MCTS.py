@@ -9,6 +9,8 @@ import math
 import aiohttp
 import traceback
 import re
+import os
+from datetime import datetime
 
 class MCTSNode:
     """MCTS Tree Node Class"""
@@ -75,6 +77,52 @@ class MCTSQuestionSample(BaseQuestionSample):
         self.expert_ports = [1]  # Multiple expert ports, corresponding to port+8000
         self.expert_ports = [port + 8000 for port in self.expert_ports]
         self.expert_base_url = "http://localhost:{}/predict"
+        
+        # Setup log file for node creation
+        self.log_file = None
+        self.setup_log_file()
+
+    def setup_log_file(self):
+        """Setup log file for MCTS node creation"""
+        # Create log directory
+        log_dir = "./logs/mcts_nodes"
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Create unique log file name with timestamp and question_id
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        question_id = self.row.get('index', 'unknown')
+        log_filename = f"mcts_nodes_q{question_id}_{timestamp}.log"
+        log_path = os.path.join(log_dir, log_filename)
+        
+        # Open log file
+        self.log_file = open(log_path, 'w', encoding='utf-8')
+        self.log_path = log_path
+        
+        # Write header
+        self.write_log("=" * 80)
+        self.write_log(f"MCTS Node Creation Log")
+        self.write_log(f"Question ID: {question_id}")
+        self.write_log(f"Question: {self.row['question']}")
+        self.write_log(f"Timestamp: {timestamp}")
+        self.write_log(f"Model: {self.args.model_path}")
+        self.write_log("=" * 80)
+        self.write_log("")
+    
+    def write_log(self, message):
+        """Write message to both log file and stdout"""
+        print(message)
+        if self.log_file:
+            self.log_file.write(message + "\n")
+            self.log_file.flush()  # Ensure immediate write
+    
+    def close_log(self):
+        """Close log file"""
+        if self.log_file:
+            self.write_log("\n" + "=" * 80)
+            self.write_log(f"Log saved to: {self.log_path}")
+            self.write_log("=" * 80)
+            self.log_file.close()
+            self.log_file = None
 
     async def extract_key_objects(self):
         """Extract key objects from question"""
@@ -249,6 +297,17 @@ class MCTSQuestionSample(BaseQuestionSample):
         child.expert_info = expert_result
         child.valid_area_ratio = valid_area_ratio
         
+        # Log node information
+        self.write_log("\n" + "="*80)
+        self.write_log(f"[NEW NODE - repeat_question] Created at depth {child.state['depth']}")
+        self.write_log(f"Action: {self.action_prompts['repeat_question']}")
+        self.write_log(f"Valid Area Ratio: {child.valid_area_ratio:.4f}")
+        self.write_log(f"Region Coords: {child.state['region_coords']}")
+        self.write_log(f"Expert Boxes Found: {len(expert_result.get('boxes', [])) if expert_result else 0}")
+        self.write_log(f"Action History: {' -> '.join(child.state['action_history'])}")
+        self.write_log(f"Node Text: {child.state['text']}")
+        self.write_log("="*80 + "\n")
+        
         return child
 
     async def execute_zoom_out_action(self, node):
@@ -334,6 +393,20 @@ class MCTSQuestionSample(BaseQuestionSample):
         total_area = node.state['image_width'] * node.state['image_height']
         child.valid_area_ratio = new_area / total_area
         
+        # Log node information
+        self.write_log("\n" + "="*80)
+        self.write_log(f"[NEW NODE - zoom_out] Created at depth {child.state['depth']}")
+        self.write_log(f"Action: {self.action_prompts['zoom_out']}")
+        self.write_log(f"Valid Area Ratio: {child.valid_area_ratio:.4f}")
+        self.write_log(f"Region Coords: {child.state['region_coords']}")
+        self.write_log(f"Original Region: ({x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f})")
+        self.write_log(f"Zoomed Region: ({new_x1:.1f}, {new_y1:.1f}, {new_x2:.1f}, {new_y2:.1f})")
+        self.write_log(f"Final Region: ({final_x1:.1f}, {final_y1:.1f}, {final_x2:.1f}, {final_y2:.1f})")
+        self.write_log(f"Expert Boxes Found: {len(expert_result.get('boxes', [])) if expert_result else 0}")
+        self.write_log(f"Missing Objects: {node.state.get('missing_objects', [])}")
+        self.write_log(f"Action History: {' -> '.join(child.state['action_history'])}")
+        self.write_log("="*80 + "\n")
+        
         return child
 
     async def expansion(self, node):
@@ -404,6 +477,12 @@ class MCTSQuestionSample(BaseQuestionSample):
         if not self.root:
             # Create temporary root node
             temp_root = MCTSNode(root_state, available_actions=self.actions)
+            self.write_log("\n" + "🌳"*40)
+            self.write_log("CREATING ROOT NODE...")
+            self.write_log(f"Question: {root_state['text']}")
+            self.write_log(f"Image Size: {root_state['image_width']} x {root_state['image_height']}")
+            self.write_log(f"Key Objects: {self.key_objects}")
+            self.write_log("🌳"*40 + "\n")
             # Execute repeat_question_action to get real root node
             self.root = await self.execute_repeat_question_action(temp_root)
             self.root.parent = None
@@ -422,6 +501,11 @@ class MCTSQuestionSample(BaseQuestionSample):
         
         # Update leaf node reward
         node.leaf_reward = reward
+        
+        # Log simulation result
+        self.write_log(f"💡 [SIMULATION] Depth: {node.state['depth']}, Reward: {reward:.4f}, "
+                       f"Confirmed: {node.state.get('caption', 'N/A')}, "
+                       f"Missing: {node.state.get('missing_objects', [])}")
 
         # 4. Backpropagation
         self.backpropagation(node, reward)
@@ -440,7 +524,9 @@ class MCTSQuestionSample(BaseQuestionSample):
             'region_coords': (0, 0, self.image_width, self.image_height)
         }
         # Run multiple simulations
-        for _ in range(self.n_simulations):
+        self.write_log(f"\n🔍 Starting {self.n_simulations} MCTS simulations...")
+        for i in range(self.n_simulations):
+            self.write_log(f"\n--- Simulation {i+1}/{self.n_simulations} ---")
             await self.single_run(initial_state)
             
         # Collect all nodes
@@ -465,6 +551,12 @@ class MCTSQuestionSample(BaseQuestionSample):
         # Find node with highest value/visits
         best_node = max(all_nodes, key=lambda x: (x.leaf_reward, all_nodes.index(x)))
         
+        self.write_log(f"\n📊 [TREE SUMMARY]")
+        self.write_log(f"Total Nodes Created: {len(all_nodes)}")
+        self.write_log(f"Best Node - Reward: {best_node.leaf_reward:.4f}, Depth: {best_node.state['depth']}, "
+                       f"Area Ratio: {best_node.valid_area_ratio:.4f}")
+        self.write_log(f"Best Node Actions: {' -> '.join(best_node.state['action_history'])}")
+        
         if self.use_ensemble:
             # Weighted voting to determine final answer
             from collections import defaultdict
@@ -479,9 +571,15 @@ class MCTSQuestionSample(BaseQuestionSample):
                 final_answer = 'yes' if 'yes' in final_answer.lower() else 'no'
             else:
                 final_answer = max(vote_result, key=vote_result.get)
+            
+            self.write_log(f"\n🗳️  [ENSEMBLE VOTING]")
+            for ans, weight in vote_result.items():
+                self.write_log(f"  {ans}: {weight:.4f}")
+            self.write_log(f"  Final Answer: {final_answer}")
         else:
             # Use best_node's answer
             final_answer = max(answers, key=lambda x: x[1])[0]
+            self.write_log(f"\n✅ [FINAL ANSWER] {final_answer} (from best node)")
         
         return final_answer, final_qs, answers[-1][0], best_node.state['image'], best_node, self.root
 
@@ -501,20 +599,24 @@ class MCTSQuestionSample(BaseQuestionSample):
         return node_info
 
     async def _process(self):
-        # Extract key objects from question
-        self.key_objects = await self.extract_key_objects()
-        
-        final_answer, prompt, full_answer, final_image, best_node, root_node = await self.get_final_answer()
-        
-        # Serialize tree structure for saving
-        # tree_info = self.serialize_tree(root_node)
-        
-        return {
-            "question_id": self.row['index'],
-            "round_id": self.round_idx,
-            "prompt": prompt,
-            "text": final_answer,
-            "answer_id": shortuuid.uuid(),
-            "model_id": self.args.model_path,
-            "answer": self.row['answer'],
-        }
+        try:
+            # Extract key objects from question
+            self.key_objects = await self.extract_key_objects()
+            
+            final_answer, prompt, full_answer, final_image, best_node, root_node = await self.get_final_answer()
+            
+            # Serialize tree structure for saving
+            # tree_info = self.serialize_tree(root_node)
+            
+            return {
+                "question_id": self.row['index'],
+                "round_id": self.round_idx,
+                "prompt": prompt,
+                "text": final_answer,
+                "answer_id": shortuuid.uuid(),
+                "model_id": self.args.model_path,
+                "answer": self.row['answer'],
+            }
+        finally:
+            # Always close log file
+            self.close_log()

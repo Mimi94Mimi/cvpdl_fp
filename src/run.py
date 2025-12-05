@@ -43,7 +43,7 @@ async def eval_model(args):
         sample_args = [random.choice(sample_args)]
     else:
         random.seed(42)  # Fix random seed
-        sample_args = [random.choice(sample_args) for _ in range(10)]
+        sample_args = [random.choice(sample_args) for _ in range(1)]
         
     tasks = [create_sample(args) for args in sample_args]
     for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Creating samples"):
