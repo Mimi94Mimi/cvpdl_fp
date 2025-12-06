@@ -34,7 +34,7 @@ class MCTSNode:
         self.extra_info = {}
 
 class MCTSQuestionSample(BaseQuestionSample):
-    def __init__(self, row, args, round_idx=0, enable_logging=True):
+    def __init__(self, row, args, round_idx=0, enable_logging=False):
         super().__init__(row, args, round_idx)
         # Control whether to write logs
         self.enable_logging = enable_logging

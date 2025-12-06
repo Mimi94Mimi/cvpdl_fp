@@ -13,7 +13,9 @@ from policies import policy_map  # Use full import path for policy_map
 async def create_sample(args):
     row, method_args, round_idx = args
     QuestionSample = policy_map[method_args.method_name]
-    return QuestionSample(row, method_args, round_idx)
+    # Pass enable_logging to QuestionSample constructor
+    enable_logging = getattr(method_args, 'enable_logging', False)
+    return QuestionSample(row, method_args, round_idx, enable_logging=enable_logging)
 
 async def process_sample(sample):
     return await sample.process()
@@ -107,6 +109,8 @@ if __name__ == "__main__":
     
     def str2bool(v):
         return v.lower() == 'true'
+    
+    parser.add_argument("--enable-logging", type=str2bool, default=False, help="Enable logging for MCTS (default: False)")
     
     parser.add_argument("--debug", type=str2bool, help="debug mode", default=False)
     args = parser.parse_args()
