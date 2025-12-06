@@ -83,6 +83,9 @@ class MCTSQuestionSample(BaseQuestionSample):
         # IoU threshold for node similarity detection (-1 means disabled)
         self.iou_threshold = getattr(args, 'iou_threshold', -1)
         
+        # Maximum consecutive repeat_question actions allowed (-1 means disabled)
+        self.max_consecutive_repeats = getattr(args, 'max_consecutive_repeats', -1)
+        
         # Visual expert API
         self.expert_ports = [1]  # Multiple expert ports, corresponding to port number +8000
         self.expert_ports = [port + 8000 for port in self.expert_ports]
@@ -417,10 +420,45 @@ class MCTSQuestionSample(BaseQuestionSample):
         
         return child
 
+    def count_consecutive_repeats(self, node):
+        """Count consecutive repeat_question actions in the path to this node"""
+        count = 0
+        current = node
+        
+        while current is not None and current.state.get('action_history'):
+            action_history = current.state['action_history']
+            if action_history:
+                last_action = action_history[-1]
+                if "Repeat" in last_action or "repeat" in last_action:
+                    count += 1
+                    current = current.parent
+                else:
+                    # Stop counting when we hit a non-repeat action
+                    break
+            else:
+                break
+        
+        return count
+    
     async def expansion(self, node):
         """Expansion phase: add a new child node"""
         if node.state['depth'] >= self.max_depth or not node.untried_actions:
             return node
+        
+        # Check if max consecutive repeats limit is enabled and would be exceeded
+        if self.max_consecutive_repeats > 0:
+            consecutive_repeats = self.count_consecutive_repeats(node)
+            
+            # If we've reached the limit, remove repeat_question from untried_actions
+            if consecutive_repeats >= self.max_consecutive_repeats:
+                if "repeat_question" in node.untried_actions:
+                    node.untried_actions.remove("repeat_question")
+                    self.write_log(f"⚠️  [REPEAT LIMIT] Node at depth {node.state['depth']} has {consecutive_repeats} consecutive repeat_question actions.")
+                    self.write_log(f"   Removing repeat_question from available actions (limit: {self.max_consecutive_repeats}).")
+                
+                # If no actions left, return current node
+                if not node.untried_actions:
+                    return node
             
         action = random.choice(node.untried_actions)
         node.untried_actions.remove(action)

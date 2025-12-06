@@ -102,6 +102,7 @@ if __name__ == "__main__":
     parser.add_argument("--method_name", type=str, default="common")
     parser.add_argument("--image-size", type=int, default=336)
     parser.add_argument("--iou-threshold", type=float, default=-1, help="IoU threshold for node similarity detection in MCTS. Set to -1 to disable similarity check (default: -1)")
+    parser.add_argument("--max-consecutive-repeats", type=int, default=-1, help="Maximum consecutive repeat_question actions allowed. Set to -1 to disable this limit (default: -1)")
     
     def str2bool(v):
         return v.lower() == 'true'
