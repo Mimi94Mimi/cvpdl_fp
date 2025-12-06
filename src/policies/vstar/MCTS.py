@@ -86,6 +86,9 @@ class MCTSQuestionSample(BaseQuestionSample):
         # Maximum consecutive repeat_question actions allowed (-1 means disabled)
         self.max_consecutive_repeats = getattr(args, 'max_consecutive_repeats', -1)
         
+        # Probability of choosing repeat_question action during expansion
+        self.repeat_probability = getattr(args, 'repeat_probability', 0.5)
+        
         # Visual expert API
         self.expert_ports = [1]  # Multiple expert ports, corresponding to port number +8000
         self.expert_ports = [port + 8000 for port in self.expert_ports]
@@ -459,8 +462,20 @@ class MCTSQuestionSample(BaseQuestionSample):
                 # If no actions left, return current node
                 if not node.untried_actions:
                     return node
-            
-        action = random.choice(node.untried_actions)
+        
+        # Choose action based on repeat_probability
+        if len(node.untried_actions) > 1 and "repeat_question" in node.untried_actions:
+            # If both actions are available, use probability to decide
+            if random.random() < self.repeat_probability:
+                action = "repeat_question"
+            else:
+                # Choose from non-repeat actions
+                other_actions = [a for a in node.untried_actions if a != "repeat_question"]
+                action = random.choice(other_actions)
+        else:
+            # If only one action available or repeat_question not available, choose randomly
+            action = random.choice(node.untried_actions)
+        
         node.untried_actions.remove(action)
         
         # Call corresponding action executor
