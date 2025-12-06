@@ -34,8 +34,11 @@ class MCTSNode:
         self.extra_info = {}
 
 class MCTSQuestionSample(BaseQuestionSample):
-    def __init__(self, row, args, round_idx=0):
+    def __init__(self, row, args, round_idx=0, enable_logging=True):
         super().__init__(row, args, round_idx)
+        # Control whether to write logs
+        self.enable_logging = enable_logging
+        
         # Get image dimensions
         image_bytes = base64.b64decode(self.image)
         img = Image.open(io.BytesIO(image_bytes))
@@ -81,7 +84,8 @@ class MCTSQuestionSample(BaseQuestionSample):
         
         # Setup log file for node creation
         self.log_file = None
-        self.setup_log_file()
+        if self.enable_logging:
+            self.setup_log_file()
 
     def setup_log_file(self):
         """Setup log file for MCTS node creation"""
@@ -111,6 +115,8 @@ class MCTSQuestionSample(BaseQuestionSample):
     
     def write_log(self, message):
         """Write message to both log file and stdout"""
+        if not self.enable_logging:
+            return
         print(message)
         if self.log_file:
             self.log_file.write(message + "\n")
@@ -118,6 +124,8 @@ class MCTSQuestionSample(BaseQuestionSample):
     
     def close_log(self):
         """Close log file"""
+        if not self.enable_logging:
+            return
         if self.log_file:
             self.write_log("\n" + "=" * 80)
             self.write_log(f"Log saved to: {self.log_path}")
@@ -608,6 +616,111 @@ class MCTSQuestionSample(BaseQuestionSample):
             "children": {action: self.serialize_tree(child) for action, child in node.children.items()}
         }
         return node_info
+    
+    def _calculate_ucb_score(self, node, parent_id):
+        """Calculate UCB score for a node (for serialization purposes)"""
+        if node.parent is None or node.visits == 0:
+            return None
+        
+        try:
+            total_visits = sum(child.visits for child in node.parent.children.values())
+            if total_visits == 0:
+                return None
+            
+            exploit = node.value / node.visits
+            explore = math.sqrt(2 * math.log(total_visits) / node.visits)
+            return exploit + self.c_puct * explore
+        except:
+            return None
+    
+    def serialize_tree_flat(self, root_node):
+        """Serialize tree structure as a flat list without hierarchy
+        
+        Args:
+            root_node: The root node of the MCTS tree
+            
+        Returns:
+            list: A list of dictionaries, each containing node information with a unique node_id
+        """
+        flat_nodes = []
+        node_counter = [0]  # Use list to maintain counter in nested function
+        
+        def traverse_and_serialize(node, parent_id=None, action_from_parent=None):
+            # Assign unique ID to current node
+            current_id = node_counter[0]
+            node_counter[0] += 1
+            
+            # Create node info dictionary
+            node_info = {
+                # Identification
+                "question_id": self.row.get('index', 'unknown'),
+                "node_id": current_id,
+                "parent_id": parent_id,
+                "action_from_parent": action_from_parent,
+                
+                # Tree structure
+                "depth": node.state.get('depth', 0),
+                "num_children": len(node.children),
+                "is_leaf": len(node.children) == 0,
+                "is_root": parent_id is None,
+                "path_length": len(node.state.get('action_history', [])),
+                
+                # MCTS statistics
+                "visits": node.visits,
+                "value": node.value,
+                "leaf_reward": node.leaf_reward,
+                "avg_value": node.value / node.visits if node.visits > 0 else 0,
+                
+                # UCB score (if has parent and parent has been visited)
+                "ucb_score": self._calculate_ucb_score(node, parent_id) if parent_id is not None else None,
+                
+                # Image region information
+                "valid_area_ratio": node.valid_area_ratio,
+                "region_coords": node.region_coords,
+                "region_width": node.region_coords[2] - node.region_coords[0],
+                "region_height": node.region_coords[3] - node.region_coords[1],
+                "region_area": (node.region_coords[2] - node.region_coords[0]) * (node.region_coords[3] - node.region_coords[1]),
+                "image_width": node.state.get('image_width', 0),
+                "image_height": node.state.get('image_height', 0),
+                
+                # Action and state information
+                "action_history": node.state.get('action_history', []),
+                "available_actions": node.untried_actions.copy() if node.untried_actions else [],
+                "num_untried_actions": len(node.untried_actions) if node.untried_actions else 0,
+                "is_fully_expanded": len(node.untried_actions) == 0 if node.untried_actions is not None else True,
+                
+                # Content information
+                "text": node.state.get('text', ''),
+                "caption": node.state.get('caption', ''),
+                "missing_objects": node.state.get('missing_objects', []),
+                "num_confirmed_objects": len(node.state.get('caption', '').split(',')) if node.state.get('caption') else 0,
+                "num_missing_objects": len(node.state.get('missing_objects', [])),
+                "all_objects_found": len(node.state.get('missing_objects', [])) == 0,
+                
+                # Expert information
+                "expert_info": node.expert_info,
+                "num_expert_boxes": len(node.expert_info.get('boxes', [])) if node.expert_info else 0,
+                "has_expert_info": node.expert_info is not None,
+                
+                # Additional information
+                "extra_info": node.extra_info,
+                
+                # Metadata
+                "question_text": self.row.get('question', ''),
+                "key_objects": self.key_objects if hasattr(self, 'key_objects') else [],
+            }
+            
+            # Add to flat list
+            flat_nodes.append(node_info)
+            
+            # Recursively process all children
+            for action, child in node.children.items():
+                traverse_and_serialize(child, parent_id=current_id, action_from_parent=action)
+        
+        # Start traversal from root
+        traverse_and_serialize(root_node)
+        
+        return flat_nodes
 
     async def _process(self):
         try:
@@ -618,6 +731,8 @@ class MCTSQuestionSample(BaseQuestionSample):
             
             # Serialize tree structure for saving
             tree_info = self.serialize_tree(root_node)
+
+            flat_tree_info = self.serialize_tree_flat(root_node)
             
             return {
                 "question_id": self.row['index'],

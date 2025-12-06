@@ -61,6 +61,26 @@ async def eval_model(args):
     with open(answers_file, "w") as f:
         for result in results:
             f.write(json.dumps(result) + "\n")
+    
+    # Collect and write flat tree info if tree_file is specified
+    if args.tree_file:
+        tree_file = os.path.expanduser(args.tree_file)
+        os.makedirs(os.path.dirname(tree_file), exist_ok=True)
+        
+        # Collect all flat tree info from samples
+        all_flat_nodes = []
+        for sample in samples:
+            # Check if sample has root node (MCTS-based methods)
+            if hasattr(sample, 'root') and sample.root is not None:
+                # Get flat tree info
+                flat_tree_info = sample.serialize_tree_flat(sample.root)
+                # Extend the list (not append) to create one big flat list
+                all_flat_nodes.extend(flat_tree_info)
+        
+        # Write all nodes to file
+        if all_flat_nodes:
+            with open(tree_file, "w") as f:
+                json.dump(all_flat_nodes, f, indent=2)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -69,6 +89,7 @@ if __name__ == "__main__":
     parser.add_argument("--image-folder", type=str, default="")
     parser.add_argument("--question-file", type=str, default="tables/question.jsonl")
     parser.add_argument("--answers-file", type=str, default="answer.jsonl")
+    parser.add_argument("--tree-file", type=str, default=None, help="Output file for MCTS tree nodes (flat list)")
     parser.add_argument("--conv-mode", type=str, default="llava_v1")
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)
