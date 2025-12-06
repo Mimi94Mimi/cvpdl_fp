@@ -77,6 +77,12 @@ class MCTSQuestionSample(BaseQuestionSample):
         # MCTS tree root node
         self.root = None
         
+        # List to record all explored nodes
+        self.explored_nodes = []
+        
+        # IoU threshold for node similarity detection (-1 means disabled)
+        self.iou_threshold = getattr(args, 'iou_threshold', -1)
+        
         # Visual expert API
         self.expert_ports = [1]  # Multiple expert ports, corresponding to port number +8000
         self.expert_ports = [port + 8000 for port in self.expert_ports]
@@ -457,6 +463,53 @@ class MCTSQuestionSample(BaseQuestionSample):
             reward = 1 - node.valid_area_ratio
         else:
             reward = 0
+        
+        # Create node record object for explored_nodes list after simulation
+        # Determine action type based on action history
+        action_type = "unknown"
+        if node.state.get('action_history'):
+            last_action = node.state['action_history'][-1]
+            if "Repeat" in last_action or "repeat" in last_action:
+                action_type = "repeat_question"
+            elif "Zoom" in last_action or "zoom" in last_action:
+                action_type = "zoom_out"
+        
+        node_record = {
+            "question_id": self.row.get('index', 'unknown'),
+            "action_type": action_type,
+            "depth": node.state.get('depth', 0),
+            "valid_area_ratio": node.valid_area_ratio,
+            "region_coords": node.region_coords,
+            "expert_boxes_found": len(node.expert_info.get('boxes', [])) if node.expert_info else 0,
+            "action_history": node.state.get('action_history', []).copy(),
+            "node_text": node.state.get('text', ''),
+            "expert_info": node.expert_info,
+            "caption": node.state.get('caption', ''),
+            "missing_objects": node.state.get('missing_objects', []).copy(),
+            "confirmed_objects": confirmed_objects.copy(),
+            "all_objects_present": all_objects_present,
+            "reward": reward,
+            "timestamp": datetime.now().isoformat(),
+            "parent_depth": node.parent.state.get('depth', -1) if node.parent else -1,
+        }
+        
+        # Check if this node is similar to any existing explored node (only if iou_threshold >= 0)
+        is_duplicate = False
+        if self.iou_threshold >= 0:
+            for existing_record in self.explored_nodes:
+                if self.is_similar_node(node_record, existing_record, iou_threshold=self.iou_threshold):
+                    is_duplicate = True
+                    self.write_log(f"⚠️  [DUPLICATE NODE DETECTED] Node at depth {node.state.get('depth', 0)} is similar to an existing node.")
+                    self.write_log(f"   Region IoU >= {self.iou_threshold} and objects match. Preventing further expansion.")
+                    break
+            
+            # If node is a duplicate, mark it as unable to expand by clearing untried actions
+            if is_duplicate:
+                node.untried_actions = []
+                self.write_log(f"   🚫 Node expansion blocked - untried_actions cleared.")
+        
+        # Add to explored nodes list
+        self.explored_nodes.append(node_record)
             
         return reward
 
@@ -633,6 +686,71 @@ class MCTSQuestionSample(BaseQuestionSample):
         except:
             return None
     
+    def is_similar_node(self, node_record1, node_record2, iou_threshold=0.8):
+        """Check if two node records are similar based on region IoU and objects
+        
+        Args:
+            node_record1: First node record dictionary
+            node_record2: Second node record dictionary
+            iou_threshold: IoU threshold for considering regions as similar (default: 0.8)
+            
+        Returns:
+            bool: True if nodes are similar, False otherwise
+        """
+        # Calculate IoU of region_coords
+        coords1 = node_record1.get('region_coords')
+        coords2 = node_record2.get('region_coords')
+        
+        if coords1 is None or coords2 is None:
+            return False
+        
+        # Extract coordinates
+        x1_min, y1_min, x1_max, y1_max = coords1
+        x2_min, y2_min, x2_max, y2_max = coords2
+        
+        # Calculate intersection area
+        inter_x_min = max(x1_min, x2_min)
+        inter_y_min = max(y1_min, y2_min)
+        inter_x_max = min(x1_max, x2_max)
+        inter_y_max = min(y1_max, y2_max)
+        
+        # Check if there is intersection
+        if inter_x_max <= inter_x_min or inter_y_max <= inter_y_min:
+            intersection_area = 0
+        else:
+            intersection_area = (inter_x_max - inter_x_min) * (inter_y_max - inter_y_min)
+        
+        # Calculate union area
+        area1 = (x1_max - x1_min) * (y1_max - y1_min)
+        area2 = (x2_max - x2_min) * (y2_max - y2_min)
+        union_area = area1 + area2 - intersection_area
+        
+        # Calculate IoU
+        if union_area == 0:
+            iou = 0
+        else:
+            iou = intersection_area / union_area
+        
+        # Check if IoU meets threshold
+        if iou < iou_threshold:
+            return False
+        
+        # Compare missing_objects
+        missing1 = set(node_record1.get('missing_objects', []))
+        missing2 = set(node_record2.get('missing_objects', []))
+        
+        if missing1 != missing2:
+            return False
+        
+        # Compare confirmed_objects
+        confirmed1 = set(node_record1.get('confirmed_objects', []))
+        confirmed2 = set(node_record2.get('confirmed_objects', []))
+        
+        if confirmed1 != confirmed2:
+            return False
+        
+        return True
+    
     def serialize_tree_flat(self, root_node):
         """Serialize tree structure as a flat list without hierarchy
         
@@ -732,7 +850,7 @@ class MCTSQuestionSample(BaseQuestionSample):
             # Serialize tree structure for saving
             tree_info = self.serialize_tree(root_node)
 
-            flat_tree_info = self.serialize_tree_flat(root_node)
+            # flat_tree_info = self.serialize_tree_flat(root_node)
             
             return {
                 "question_id": self.row['index'],

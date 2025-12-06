@@ -101,6 +101,7 @@ if __name__ == "__main__":
     parser.add_argument("--lang", type=str, default="en")
     parser.add_argument("--method_name", type=str, default="common")
     parser.add_argument("--image-size", type=int, default=336)
+    parser.add_argument("--iou-threshold", type=float, default=-1, help="IoU threshold for node similarity detection in MCTS. Set to -1 to disable similarity check (default: -1)")
     
     def str2bool(v):
         return v.lower() == 'true'
